@@ -697,54 +697,13 @@ def export_to_excel(
     print(f"Analysis exported to Excel file '{output_path}'\n")
 
 
-def summarise_lrns(interval_analysis_df, selected_intervals):
-    """Summarise each LRU name with the count of OK and NOK table."""
-
-    lru_summary = (
-        interval_analysis_df.groupby("LRU Name")["Interval Check"]
-        .value_counts()
-        .unstack(fill_value=0)
-        .reset_index()
-    )
-
-    print("LRU Messages Summary:")
-    print(lru_summary.to_string(index=False))
-
-    nok_examples = interval_analysis_df[interval_analysis_df["Interval Check"] == "NOK"]
-    nok_examples_sorted = nok_examples.sort_values(
-        by="LRU Name").reset_index(drop=True)
-    first_nok_per_lru = nok_examples_sorted.drop_duplicates(
-        subset="LRU Name", keep="first"
-    )
-
-    if not first_nok_per_lru.empty:
-        for _, row in first_nok_per_lru.iterrows():
-            table_name = row.get("Influx Table", "N/A")
-            lru_name = row.get("LRU Name", "N/A")
-            mean_interval = row.get("Mean Interval (ms)", "N/A")
-            max_interval = row.get("Max Interval (ms)", "N/A")
-            icd_interval = row.get("ICD Transmit Interval (ms)", "N/A")
-            icd_interval_refactored = row.get("ICD Int / Max Occ (ms)", "N/A")
-            late_intervals_ratio = row.get(
-                "Intervals > 1.5x Mean (count/total)", "N/A")
-
-            print("\nExample NOK Table:")
-            print(f"Table Name: {table_name}")
-            print(f"LRU Name: {lru_name}")
-            print(f"ICD Interval (ms): {icd_interval}")
-            print(f"ICD Int / Max Occ (ms): {icd_interval_refactored}")
-            print(f"Max Interval (ms): {max_interval}")
-            print(f"Mean Interval (ms): {mean_interval}")
-            print(
-                f"Intervals > 1.5x Mean (count/total): {late_intervals_ratio}")
-    else:
-        print("\nNo NOK tables found.")
-    print("\n")
-
-
 def main(args):
     """Main function to execute the script."""
+
+    # Start timing
     script_start_time = time.time()
+
+    # Parse CLI args
     credentials_path = args.credentials_path
     config = args.config
     start_time = args.start_time
@@ -752,13 +711,14 @@ def main(args):
     load_pickle_path = args.load_pickle_path
     save_pickle_path = args.save_pickle_path
 
+    # Load Influx credentials
     cert = read_certificate()
-
     influxdb_credentials = read_influxdb_credentials(credentials_path)
     host = influxdb_credentials["host"]
     token = influxdb_credentials["token"]
     database = influxdb_credentials["database"]
 
+    # Load data stored in pickle, if provided
     if load_pickle_path:
         (
             tables_w_data_dict,
@@ -777,23 +737,26 @@ def main(args):
         print("\nData will be queried from InfluxDB:")
         pickle_available = False
 
+    # Summarise query
     print(f"Start time: {start_time}")
     print(f"End time: {end_time}")
     print(f"Config: {config}")
     print(f"Database: {database}")
 
+    # Run query, if no data already provided
     if not pickle_available:
         print("\nCommencing query")
         client = create_influxdb_client(token, host, database, cert)
         found_tables_list = query_influx_measurements(client)
         print(f"Found {len(found_tables_list)} tables\n")
 
+        # Select threading method; no threading, map, or futures
         mode_dict = {1: "normal", 2: "tpemaprc", 3: "tpefutr"}
         mode = 2
         fallback_mode = 1
-
         function_name = f"query_influx_timestamps_{mode_dict[mode]}"
 
+        # Run query
         try:
             func = globals()[function_name]
             (tables_w_data_dict, tables_w_data_list, tables_wo_data_list) = func(
@@ -812,6 +775,7 @@ def main(args):
                 client, found_tables_list, start_time, end_time
             )
 
+        # Save to pickle, if path provided at CLI
         if save_pickle_path:
             save_to_pickle(
                 save_pickle_path,
@@ -824,6 +788,7 @@ def main(args):
                 database,
             )
 
+    # Prepare output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_folder = f"output_verify_influx/{timestamp}"
     os.makedirs(output_folder, exist_ok=True)
@@ -831,6 +796,7 @@ def main(args):
         output_folder, f"output_verify_influx_{timestamp}.xlsx")
     working_dir = os.getcwd()
 
+    # Summarise
     total_tables_w_data = len(tables_w_data_list)
     total_tables_wo_data = len(tables_wo_data_list)
     total_tables = total_tables_w_data + total_tables_wo_data
@@ -875,6 +841,7 @@ def main(args):
     tables_wo_data_df = pd.DataFrame(
         tables_wo_data_list, columns=["Influx Table"])
 
+    # Export results to Excel
     export_to_excel(
         output_path,
         output_folder,
@@ -912,11 +879,6 @@ if __name__ == "__main__":
         "--save_pickle_path",
         required=False,
         help="Path to save the pickle file for caching data",
-    )
-    parser.add_argument(
-        "--dump_messages_path",
-        required=False,
-        help="Path to dump ICD messages as a JSON file",
     )
 
     args = parser.parse_args()
